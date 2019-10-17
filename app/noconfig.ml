@@ -49,10 +49,11 @@ let parse_job =
     | _ -> failwith "fancy stuff not implemented"
   in
   function
-  | { Parsetree.pstr_desc = Pstr_module { pmb_name = _ ; pmb_expr ; _} ; _ } ->
+  | { Parsetree.pstr_desc = Pstr_module { pmb_name = job_name ;
+                                          pmb_expr ; _} ; _ } ->
     begin match pmb_expr.pmod_desc with
-      | Pmod_functor (name,_,_) as first ->
-        Some (name.txt,
+      | Pmod_functor _ as first ->
+        Some (job_name.txt,
               fold_functor [] first)
       | _ -> None
     end
