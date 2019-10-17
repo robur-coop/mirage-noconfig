@@ -1,0 +1,6 @@
+(executable
+  (name noconfig)
+  (modules noconfig)
+  (public_name noconfig)
+  (libraries fmt logs ocaml-compiler-libs.common)
+)
