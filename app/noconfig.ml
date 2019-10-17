@@ -75,6 +75,57 @@ let parse_job =
     end
   | _ -> None
 
+let collect_attributes things =
+  let open Parsetree in
+  List.fold_left (fun (keys, packages) si ->
+      match si.pstr_desc with
+      | Pstr_attribute { attr_name ; attr_payload ; _ } ->
+        begin match attr_name.Asttypes.txt with
+          | "package" -> (keys, attr_payload :: packages)
+          | "key" -> (attr_payload :: keys, packages)
+          | x ->
+            Printf.printf "skipping unknown attribute %s\n" x;
+            (keys, packages)
+        end
+      | _ -> (keys, packages))
+    ([], []) things
+
+let extract_package =
+  let open Parsetree in
+  let const_string = function
+    | Pexp_constant (Pconst_string (s, _)) -> s
+    | _ -> assert false
+  in
+  let struct_string = function
+    | Pstr_eval (e, _) -> const_string e.pexp_desc
+    | _ -> assert false
+  in
+  function
+  | PStr str ->
+    List.fold_left (fun acc si ->
+        match si.pstr_desc with
+        | Pstr_eval (e, _) ->
+          let name = const_string e.pexp_desc in
+          let a = e.pexp_attributes in
+          let min =
+            match List.find_opt (fun x -> x.attr_name.txt = "min") a with
+            | None -> None
+            | Some attr -> match attr.attr_payload with
+              | PStr str -> Some (struct_string ((List.hd str).pstr_desc))
+              | _ -> assert false
+          in
+          let max =
+            match List.find_opt (fun x -> x.attr_name.txt = "max") a with
+            | None -> None
+            | Some attr -> match attr.attr_payload with
+              | PStr str -> Some (struct_string ((List.hd str).pstr_desc))
+              | _ -> assert false
+          in
+          (name, min, max) :: acc
+        | _ -> acc)
+      [] str
+  | _ -> assert false
+
 let topl_functors lst =
   List.iter (
     fun x -> x.Parsetree.pstr_desc |> function
@@ -162,12 +213,22 @@ let () =
   Fmt.pr "\nExternal modules:\n%a\n----\n"
     Fmt.(list ~sep:(unit"\n")string) @@ ext_mirage_depend parsed ;
 
+  let _keys, packages = collect_attributes parsed in
+  let packages = List.flatten @@ List.map extract_package packages in
+  let pp_package ppf (name, min, max) =
+    Fmt.pf ppf "package %a %a %S"
+      Fmt.(option ~none:(unit "") (prefix (unit "~min:") (quote string))) min
+      Fmt.(option ~none:(unit "") (prefix (unit "~max:") (quote string))) max
+      name
+  in
+
   List.iter (fun (job_name, args, functors) ->
       Fmt.pr "\n-- Job %S in %S:\n" job_name Sys.argv.(1);
       Fmt.pr "args: %a\nfunctors %a\n"
         Fmt.(list ~sep:(unit " ") string) args
         Fmt.(list ~sep:(unit " -> ") (pair ~sep:(unit " : ") string string))
         functors;
+      Fmt.pr "packages %a\n" Fmt.(list ~sep:(unit "@;") pp_package) packages;
       let filename =
         let fn = List.hd (List.rev (String.split_on_char '/' Sys.argv.(1))) in
         String.sub fn 0 (String.index fn '.')
