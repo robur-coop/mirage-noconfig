@@ -116,22 +116,23 @@ let map_foreign = function
   | "RANDOM" -> "random"
   | _ -> assert false
 
+(* and this is the actual hard part, need to keep some environment to construct proper terms *)
 let map_register = function
   | _, "PCLOCK" -> "default_posix_clock"
   | _, "MCLOCK" -> "default_monotonic_clock"
-  | _, "HTTP" -> "cohttp_server (conduit_direct ~tls:true (generic_stackv4 default_network))"
-  | name, ("KV_RO" | "Mirage_kv_lwt.RO") -> "generic_kv_ro " ^ String.lowercase_ascii name
+  | _, "HTTP" -> "cohttp_server (conduit_direct ~tls:true (generic_stackv4 default_network))" (* TODO *)
+  | name, ("KV_RO" | "Mirage_kv_lwt.RO") -> "generic_kv_ro " ^ String.lowercase_ascii name (* TODO *)
   | _, ("TIME" | "Mirage_time_lwt.S") -> "default_time"
-  | _, ("STACKV4" | "Mirage_stack_lwt.V4") -> "generic_stackv4 default_network"
+  | _, ("STACKV4" | "Mirage_stack_lwt.V4") -> "generic_stackv4 default_network" (* TODO *)
   | _, "CONSOLE" -> "default_console"
-  | _, "BLOCK" -> "block_of_file \"disk.img\""
+  | _, "BLOCK" -> "block_of_file \"disk.img\"" (* TODO *)
   | _, "NETWORK" -> "default_network"
-  | _, "ETHERNET" -> "etif default_network"
-  | _, "ARP" -> "arp (etif default_network)"
-  | _, "IPV4" -> "create_ipv4 (etif default_network) (arp (etif default_network))"
-  | _, "Resolver_lwt.S" -> "resolver_dns (generic_stack default_network)"
-  | _, "Conduit_mirage.S" -> "conduit_direct (generic_stack default_network)"
-  | _, "IPV6" -> "create_ipv6 (etif default_network) { addresses = [] ; netmasks = [] ; gateways = [] }"
+  | _, "ETHERNET" -> "etif default_network" (* TODO depending on (a) number of ethernet (b) whether network was used as well, reuse network binding *)
+  | _, "ARP" -> "arp (etif default_network)" (* TODO see above *)
+  | _, "IPV4" -> "create_ipv4 (etif default_network) (arp (etif default_network))" (* TODO same as above *)
+  | _, "Resolver_lwt.S" -> "resolver_dns (generic_stack default_network)" (* TODO same as above*)
+  | _, "Conduit_mirage.S" -> "conduit_direct (generic_stack default_network)" (* TODO same as above *)
+  | _, "IPV6" -> "create_ipv6 (etif default_network) { addresses = [] ; netmasks = [] ; gateways = [] }" (* TODO ??? *)
   | _, "RANDOM" -> "default_random"
   | _ -> assert false
 
