@@ -1,60 +1,76 @@
 let filter_none (type a) : a option list -> a option list =
   fun a -> List.filter (function None -> false | Some _ -> true) a
 
+let rec long_unwind acc =
+  let open Longident in
+  function
+  | Lident plain -> String.concat "." @@ plain :: acc
+  | Ldot (x,y) -> long_unwind (y :: acc) x
+  | Lapply (x, _y) -> long_unwind ("complex" :: acc) x
+
+let modtyp =
+  let open Parsetree in
+  function
+  | None -> "NONETODO"
+  | Some x ->
+    match x.pmty_desc with
+    | Pmty_ident {txt ; _ } -> (* long_unwind [] txt *)
+      begin match txt with
+        | Lident plain -> plain
+        | Ldot (a, b) ->
+          begin match a with
+            | Lident "Mirage_types" | Lident "Mirage_types_lwt" -> ""
+            | Lident sth -> sth ^ "."
+            | _ -> assert false
+          end ^ b
+        | Lapply _ -> assert false
+      end
+    | _ -> "TODO too complicated"
+
 let parse_job =
   let open Parsetree in
-  let rec long_unwind acc = let open Longident in function
-      | Lident plain -> String.concat "." @@ plain::acc
-      | Ldot (x,y) -> long_unwind (y::acc) x
-    | Lapply (x, _y) -> long_unwind ("complex"::acc) x
-  in
   let rec fold_function acc pvb_expr =
     match pvb_expr.pexp_desc with
+    | Pexp_fun (Nolabel, None, {ppat_desc = Ppat_any; _}, exp) ->
+      fold_function ("_" :: acc) exp
     | Pexp_fun (Nolabel, None, {ppat_desc = Ppat_var name; _}, exp) ->
-      fold_function (name.Asttypes.txt::acc) exp
+      fold_function (name.Asttypes.txt :: acc) exp
     | _ -> acc
-    in
-  let rec fold_functor acc = function
+  in
+  let rec fold_functor functors = function
     | Pmod_functor (name, typ , next) ->
       (*fold_functor ((name, typ) :: acc) next.pmod_desc*)
-      fold_functor ((None, name.txt, match typ with
-        | None -> "NONETODO"
-        | Some x -> begin match x.pmty_desc with
-            | Pmty_ident {txt ; _ } ->
-              long_unwind [] txt
-            | _ -> "TODO too complicated"
-            end
-        ) :: acc) next.pmod_desc
+      fold_functor ((name.txt, modtyp typ) :: functors) next.pmod_desc
     | Pmod_structure lst ->
-      let start = List.fold_left (fun acc si ->
-          match si.pstr_desc with
-          | Pstr_value (_rec, vbs) ->
-            List.fold_left (fun acc vb ->
-                (* a value binding list *)
-                begin match vb.pvb_pat.ppat_desc with
-                  | Ppat_var thing ->
-                    if thing.Asttypes.txt <> "start"
-                    then acc
-                    else
-                      fold_function [] vb.pvb_expr
-                  | _ -> acc
-                end) acc vbs
-          | _ -> acc) [] lst
-                  |>  List.rev in
-      begin match List.rev acc with
-      | [] -> acc
-      | (_ (* todo overriding previous start on Some _ *),
-         name, typ)::tl -> (Some start, name, typ) :: tl
+      let start_args =
+        List.fold_left (fun acc si ->
+            match si.pstr_desc with
+            | Pstr_value (_rec, vbs) ->
+              List.fold_left (fun acc vb ->
+                  (* a value binding list *)
+                  begin match vb.pvb_pat.ppat_desc with
+                    | Ppat_var {txt; _} ->
+                      if txt <> "start" then acc else fold_function [] vb.pvb_expr
+                    | _ -> acc
+                  end) acc vbs
+            | _ -> acc) [] lst
+        |>  List.rev
+      in
+      begin match start_args with
+        | [] -> None
+        | args -> Some (args, List.rev functors)
       end
-    | _ -> failwith "fancy stuff not implemented"
+    | _ -> None
   in
   function
   | { Parsetree.pstr_desc = Pstr_module { pmb_name = job_name ;
                                           pmb_expr ; _} ; _ } ->
     begin match pmb_expr.pmod_desc with
       | Pmod_functor _ as first ->
-        Some (job_name.txt,
-              fold_functor [] first)
+        begin match fold_functor [] first with
+          | None -> None
+          | Some (args, functors) -> Some (job_name.txt, args, functors)
+        end
       | _ -> None
     end
   | _ -> None
@@ -81,9 +97,59 @@ let ext_mirage_depend parsed =
                   (min 7 @@ String.length x) = "Mirage_")
     elems
 
+let map_foreign = function
+  | "PCLOCK" -> "pclock"
+  | "MCLOCK" -> "mclock"
+  | "KV_RO" | "Mirage_kv_lwt.RO" -> "kv_ro"
+  | "HTTP" -> "http"
+  | "NETWORK" -> "network"
+  | "ETHERNET" -> "ethernet"
+  | "ARP" -> "arpv4"
+  | "IPV4" -> "ipv4"
+  | "TIME" | "Mirage_time_lwt.S" -> "time"
+  | "STACKV4" | "Mirage_stack_lwt.V4" -> "stackv4"
+  | "CONSOLE" -> "console"
+  | "BLOCK" -> "block"
+  | "Resolver_lwt.S" -> "resolver"
+  | "Conduit_mirage.S" -> "conduit"
+  | "IPV6" -> "ipv6"
+  | "RANDOM" -> "random"
+  | _ -> assert false
+
+let map_register = function
+  | _, "PCLOCK" -> "default_posix_clock"
+  | _, "MCLOCK" -> "default_monotonic_clock"
+  | _, "HTTP" -> "cohttp_server (conduit_direct ~tls:true (generic_stackv4 default_network))"
+  | name, ("KV_RO" | "Mirage_kv_lwt.RO") -> "generic_kv_ro " ^ String.lowercase_ascii name
+  | _, ("TIME" | "Mirage_time_lwt.S") -> "default_time"
+  | _, ("STACKV4" | "Mirage_stack_lwt.V4") -> "generic_stackv4 default_network"
+  | _, "CONSOLE" -> "default_console"
+  | _, "BLOCK" -> "block_of_file \"disk.img\""
+  | _, "NETWORK" -> "default_network"
+  | _, "ETHERNET" -> "etif default_network"
+  | _, "ARP" -> "arp (etif default_network)"
+  | _, "IPV4" -> "create_ipv4 (etif default_network) (arp (etif default_network))"
+  | _, "Resolver_lwt.S" -> "resolver_dns (generic_stack default_network)"
+  | _, "Conduit_mirage.S" -> "conduit_direct (generic_stack default_network)"
+  | _, "IPV6" -> "create_ipv6 (etif default_network) { addresses = [] ; netmasks = [] ; gateways = [] }"
+  | _, "RANDOM" -> "default_random"
+  | _ -> assert false
+
+let output_config filename name _args functors =
+  (* assert (List.length functors = List.length args); *)
+  Fmt.pr "open Mirage\n";
+  Fmt.pr "let main = foreign %S (%a @-> job)\n"
+    (String.capitalize_ascii (filename ^ "." ^ name))
+    Fmt.(list ~sep:(unit " @-> ") string)
+    (List.map map_foreign (List.map snd functors));
+  Fmt.pr "let () = register %S [ main $ %a ]\n"
+    (String.lowercase_ascii name)
+    Fmt.(list ~sep:(unit " $ ") string)
+    (List.map map_register functors)
+
 let () =
   let parsed =
-  Ocaml_common.Pparse.parse_implementation Fmt.stdout ~tool_name:"noconfig"
+  Ocaml_common.Pparse.parse_implementation ~tool_name:"noconfig"
     Sys.argv.(1)
   in
   topl_functors parsed ;
@@ -95,18 +161,20 @@ let () =
   Fmt.pr "\nExternal modules:\n%a\n----\n"
     Fmt.(list ~sep:(unit"\n")string) @@ ext_mirage_depend parsed ;
 
-  List.iter (fun (job_name, job) ->
+  List.iter (fun (job_name, args, functors) ->
       Fmt.pr "\n-- Job %S in %S:\n" job_name Sys.argv.(1);
-      List.iter (function
-        (None, _name, _typ) -> Fmt.pr " -> %s : %s" _name _typ
-          | (Some args, _name, _typ) ->
-            Fmt.pr "(fun %a) -> %s:%s"
-              Fmt.(list ~sep:(unit" ") string) args
-              _name _typ
-        ) job
-      ;
-      Fmt.pr "\n"
-    ) jobs
+      Fmt.pr "args: %a\nfunctors %a\n"
+        Fmt.(list ~sep:(unit " ") string) args
+        Fmt.(list ~sep:(unit " -> ") (pair ~sep:(unit " : ") string string))
+        functors;
+      let filename =
+        let fn = List.hd (List.rev (String.split_on_char '/' Sys.argv.(1))) in
+        String.sub fn 0 (String.index fn '.')
+      in
+      output_config filename job_name args functors)
+    jobs
+
+  (* output_configs jobs *)
 
 (*  Fmt.pr "%a"
     Ocaml_common.Printast.implementation parsed
