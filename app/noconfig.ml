@@ -67,18 +67,19 @@ let topl_functors lst =
     | _ -> ()
   )lst
 
-let ext_mirage_depend _parsed =
-  ["TODO"]
-  (*
+let ext_mirage_depend parsed =
   let module D = Ocaml_common.Depend in
   D.add_implementation (D.make_leaf "TODO" |>
                         function Node (_, bound_map) -> bound_map
                        ) parsed ;
-  D.StringSet.filter (fun x -> String.sub x 0
-                         (min 7 @@ String.length x) = "Mirage_")
-    !D.free_structure_names
-  |> D.StringSet.elements
-*)
+  let their_stringset = !D.free_structure_names in
+  let module SS = Set.Make(struct
+      type t = string let compare = compare
+    end) in
+  let elems = SS.elements (Obj.magic their_stringset) in
+  List.filter (fun x -> String.sub x 0
+                  (min 7 @@ String.length x) = "Mirage_")
+    elems
 
 let () =
   let parsed =
