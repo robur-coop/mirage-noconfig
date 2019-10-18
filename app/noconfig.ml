@@ -1,15 +1,23 @@
 let filter_none (type a) : a option list -> a option list =
   fun a -> List.filter (function None -> false | Some _ -> true) a
 
+(* PT is out target parsetree.
+   Because all versions of OCaml vary ever so slightly, it is not
+   easy to write portable code that works on the internal AST representation
+   and have it compiling across many OCaml versions.
+   Migrate_parsetree aims to solve this problem for us! *)
+module PT = Migrate_parsetree.OCaml_409
+module Parsetree = PT.Ast.Parsetree
+
 let rec long_unwind acc =
-  let open Longident in
+  let open PT.Ast.Longident in
   function
   | Lident plain -> String.concat "." @@ plain :: acc
   | Ldot (x,y) -> long_unwind (y :: acc) x
   | Lapply (x, _y) -> long_unwind ("complex" :: acc) x
 
 let modtyp =
-  let open Parsetree in
+  let open PT.Ast.Parsetree in
   function
   | None -> "NONETODO"
   | Some x ->
@@ -200,9 +208,17 @@ let output_config filename name _args functors =
     (List.map map_register functors)
 
 let () =
-  let parsed =
-  Ocaml_common.Pparse.parse_implementation ~tool_name:"noconfig"
-    Sys.argv.(1)
+  let original, parsed =
+    (* parse using the current compiler tooling,
+       then convert to the {!PT} representation that this application
+       knows about: *)
+    let impl =
+      let lexbuf = Lexing.from_channel (open_in_bin Sys.argv.(1)) in
+      Ocaml_common.Parse.implementation lexbuf in
+    let module Cool = Migrate_parsetree.Convert
+        (Migrate_parsetree.OCaml_current)
+        (PT) in
+    impl, Cool.copy_structure impl
   in
   topl_functors parsed ;
   let jobs = List.fold_left (fun acc expr ->
@@ -211,7 +227,7 @@ let () =
       | Some job -> job::acc
     ) [] parsed in
   Fmt.pr "\nExternal modules:\n%a\n----\n"
-    Fmt.(list ~sep:(unit"\n")string) @@ ext_mirage_depend parsed ;
+    Fmt.(list ~sep:(unit"\n")string) @@ ext_mirage_depend original ;
 
   let _keys, packages = collect_attributes parsed in
   let packages = List.flatten @@ List.map extract_package packages in
