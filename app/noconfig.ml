@@ -212,7 +212,7 @@ let output_config filename name _args functors packages =
     Fmt.(list ~sep:(unit " $ ") string)
     (List.map map_register functors)
 
-let cmd_everything () unikernel_file =
+let cmd_everything () _target_backend unikernel_file =
   let original, parsed =
     (* parse using the current compiler tooling,
        then convert to the {!PT} representation that this application
@@ -243,7 +243,7 @@ let cmd_everything () unikernel_file =
   let packages = List.flatten @@ List.map extract_package packages in
 
   List.iter (fun (job_name, args, functors) ->
-      Fmt.pr "\n-- Job %S in %S:\n" job_name Sys.argv.(1);
+      Fmt.pr "\n-- Job %S in %S:\n" job_name unikernel_file;
       Fmt.pr "args: %a\nfunctors %a\n"
         Fmt.(list ~sep:(unit " ") string) args
         Fmt.(list ~sep:(unit " -> ") (pair ~sep:(unit " : ") string string))
@@ -251,7 +251,7 @@ let cmd_everything () unikernel_file =
       Fmt.pr "packages %a\n"
         Fmt.(list ~sep:(unit "@;") pp_package) packages;
       let filename =
-        let fn = List.hd (List.rev (String.split_on_char '/' Sys.argv.(1))) in
+        let fn = List.hd (List.rev (String.split_on_char '/' unikernel_file)) in
         String.sub fn 0 (String.index fn '.')
       in
       output_config filename job_name args functors packages)
@@ -265,6 +265,10 @@ let cmd_everything () unikernel_file =
 *)
   ; `Ok ()
 
+
+
+(* command-line utility *)
+
 open Cmdliner
 
 let setup_log =
@@ -273,13 +277,75 @@ let setup_log =
       Logs.set_level level;
       Logs.set_reporter (Logs_fmt.reporter ~dst:Format.std_formatter ())
     )
-        $ Fmt_cli.style_renderer ()
-        $ Logs_cli.level ())
+        $ Fmt_cli.style_renderer ~docs:Manpage.s_common_options ()
+        $ Logs_cli.level ~docs:Manpage.s_common_options ())
+
+let file_or_path_conv : string Cmdliner.Arg.conv =
+  (* an argument converter that takes either a path to a file,
+     or to a directory (in which it will try to look for unikernel.ml)
+  *)
+  let normalize_path path =
+    String.split_on_char '/' path
+    |> List.fold_left (fun acc_tup elt -> match elt, acc_tup with
+        | ("" | "."), (true,_) -> acc_tup
+        | "..", (true, (("."|""|"..")::_ as acc)) -> true, ".."::acc
+        | "..", (true, _::acc) -> true, acc (*if not special then remove*)
+        | elt, (_, acc) -> true, elt::acc) (false,[])
+    |> snd |> List.rev |> String.concat "/"
+  in
+  let pp ppf _x = Fmt.pf ppf "%S" "" in
+  let check path =
+    let path = if path = "" then "." else path in
+    let path =
+      if Sys.file_exists path && Sys.is_directory path
+      then path ^ "/unikernel.ml" else path in
+    let path = normalize_path path in
+    (* file_exists returns true for directories as well: *)
+    if Sys.file_exists path && not (Sys.is_directory path)
+    then begin Logs.app (fun m -> m "file %S" path); Ok path
+    end else begin
+      let path =
+        if '.' = path.[0]
+        then Sys.getcwd () ^ "/" ^ path else path in
+      Error (`Msg (Format.sprintf
+                     "Is this a unikernel? Unable to find %S" (normalize_path path)))
+    end
+  in
+  Arg.conv (check,  pp)
+
+let opt_converted (type v) (default:string) (conv:v Arg.conv) info =
+  (* This is a wrapper around Cmdliner.Arg.opt that will
+     return [conv default] instead of [default] when
+     [use_default evaluated] is [true].
+     [evaluated] is the result of the [{!Arg.value} {!Arg.opt}].
+     (i.e. can be used to detect when option is not present on
+     the commandline, or if the parsed value does not meet expectations).
+     It feels like there should be an easier way to do this.
+  *)
+  Arg.value (Arg.opt (Arg.some conv) (None) info)
+  |> Term.app (Term.const (function
+      | None ->
+        Arg.conv_parser conv default
+      | Some explicit -> Ok explicit))
+  |> Term.term_result
 
 let unikernel_file =
-  Arg.value
-  @@ Arg.(opt file) "unikernel.ml"
-  @@ Arg.info ["unikernel"]
+  (* here we use {!opt_converted} to make sure we have a valid path*)
+  opt_converted "." file_or_path_conv
+  @@ Arg.info
+    ~doc:{|Path to unikernel to analyze. Defaults to current directory.|}
+    ~docv:"FILE-OR-FOLDER" ["unikernel"]
+
+let target_backend =
+  let backends = ["spt";"xen";"hvt";"unix";"qubes"] in
+  (* TODO there are probably some more;
+     if only mirage --help wasn't broken I could list them... *)
+  Arg.opt (Arg.enum (List.map (fun x -> x,x) backends)) "unix"
+  @@ Arg.info
+    ~doc:("Target backend, e.g. "
+          ^ String.concat ", " (List.map (fun s -> "'" ^ s ^ "'") backends))
+    ~docv:"BACKEND" ["target"]
+  |> Arg.value
 
 let default_cmd =
   let doc = "" in
@@ -288,9 +354,11 @@ let default_cmd =
   TODO our incredibly helpful documentation.
   |}
   ] in
-  Term.(ret (const cmd_everything $ setup_log $ unikernel_file)),
-  Term.info "noinfo" ~version:"%%VERSION_NUM%%" ~doc ~man
+  Term.(ret (const cmd_everything $ setup_log
+             $ target_backend
+             $ unikernel_file)),
+  Term.info "noconfig" ~sdocs:Manpage.s_common_options
+    ~version:"%%VERSION_NUM%%" ~doc ~man
 
 let () =
-  match Term.eval default_cmd with
-  | `Ok _ -> exit 0 | _ -> exit 1
+  Term.exit (Term.eval default_cmd)
