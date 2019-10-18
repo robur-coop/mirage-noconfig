@@ -195,10 +195,18 @@ let map_register = function
   | _, "RANDOM" -> "default_random"
   | _ -> assert false
 
-let output_config filename name _args functors =
+let pp_package ppf (name, min, max) =
+  Fmt.pf ppf "package %a %a %S"
+    Fmt.(option ~none:(unit "") (prefix (unit "~min:") (quote string))) min
+    Fmt.(option ~none:(unit "") (prefix (unit "~max:") (quote string))) max
+    name
+
+let output_config filename name _args functors packages =
   (* assert (List.length functors = List.length args); *)
   Fmt.pr "open Mirage\n";
-  Fmt.pr "let main = foreign %S (%a @-> job)\n"
+  Fmt.pr "let packages = [ %a ]\n\n"
+    Fmt.(list ~sep:(unit "; ") pp_package) packages;
+  Fmt.pr "let main = foreign ~packages %S (%a @-> job)\n\n"
     (String.capitalize_ascii (filename ^ "." ^ name))
     Fmt.(list ~sep:(unit " @-> ") string)
     (List.map map_foreign (List.map snd functors));
@@ -231,12 +239,6 @@ let () =
 
   let _keys, packages = collect_attributes parsed in
   let packages = List.flatten @@ List.map extract_package packages in
-  let pp_package ppf (name, min, max) =
-    Fmt.pf ppf "package %a %a %S"
-      Fmt.(option ~none:(unit "") (prefix (unit "~min:") (quote string))) min
-      Fmt.(option ~none:(unit "") (prefix (unit "~max:") (quote string))) max
-      name
-  in
 
   List.iter (fun (job_name, args, functors) ->
       Fmt.pr "\n-- Job %S in %S:\n" job_name Sys.argv.(1);
@@ -244,12 +246,13 @@ let () =
         Fmt.(list ~sep:(unit " ") string) args
         Fmt.(list ~sep:(unit " -> ") (pair ~sep:(unit " : ") string string))
         functors;
-      Fmt.pr "packages %a\n" Fmt.(list ~sep:(unit "@;") pp_package) packages;
+      Fmt.pr "packages %a\n"
+        Fmt.(list ~sep:(unit "@;") pp_package) packages;
       let filename =
         let fn = List.hd (List.rev (String.split_on_char '/' Sys.argv.(1))) in
         String.sub fn 0 (String.index fn '.')
       in
-      output_config filename job_name args functors)
+      output_config filename job_name args functors packages)
     jobs
 
   (* output_configs jobs *)
