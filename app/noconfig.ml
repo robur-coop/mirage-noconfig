@@ -1,6 +1,3 @@
-let filter_none (type a) : a option list -> a option list =
-  fun a -> List.filter (function None -> false | Some _ -> true) a
-
 (* PT is out target parsetree.
    Because all versions of OCaml vary ever so slightly, it is not
    easy to write portable code that works on the internal AST representation
@@ -215,13 +212,13 @@ let output_config filename name _args functors packages =
     Fmt.(list ~sep:(unit " $ ") string)
     (List.map map_register functors)
 
-let () =
+let cmd_everything () unikernel_file =
   let original, parsed =
     (* parse using the current compiler tooling,
        then convert to the {!PT} representation that this application
        knows about: *)
     let impl =
-      let lexbuf = Lexing.from_channel (open_in_bin Sys.argv.(1)) in
+      let lexbuf = Lexing.from_channel (open_in_bin unikernel_file) in
       Ocaml_common.Parse.implementation lexbuf in
     let module Cool = Migrate_parsetree.Convert
         (Migrate_parsetree.OCaml_current)
@@ -229,11 +226,16 @@ let () =
     impl, Cool.copy_structure impl
   in
   topl_functors parsed ;
+(*  Fmt.pr "%a"
+      Ocaml_common.Printast.implementation _original ;*)
+
+
   let jobs = List.fold_left (fun acc expr ->
       match parse_job expr with
       | None -> acc
       | Some job -> job::acc
     ) [] parsed in
+
   Fmt.pr "\nExternal modules:\n%a\n----\n"
     Fmt.(list ~sep:(unit"\n")string) @@ ext_mirage_depend original ;
 
@@ -257,6 +259,38 @@ let () =
 
   (* output_configs jobs *)
 
-(*  Fmt.pr "%a"
-    Ocaml_common.Printast.implementation parsed
+(*
+  ;Fmt.pr "%a"
+      Ocaml_common.Printast.implementation original ;
 *)
+  ; `Ok ()
+
+open Cmdliner
+
+let setup_log =
+  Term.(const (fun style_renderer level ->
+      Fmt_tty.setup_std_outputs ?style_renderer ();
+      Logs.set_level level;
+      Logs.set_reporter (Logs_fmt.reporter ~dst:Format.std_formatter ())
+    )
+        $ Fmt_cli.style_renderer ()
+        $ Logs_cli.level ())
+
+let unikernel_file =
+  Arg.value
+  @@ Arg.(opt file) "unikernel.ml"
+  @@ Arg.info ["unikernel"]
+
+let default_cmd =
+  let doc = "" in
+  let man = [
+    `P {|
+  TODO our incredibly helpful documentation.
+  |}
+  ] in
+  Term.(ret (const cmd_everything $ setup_log $ unikernel_file)),
+  Term.info "noinfo" ~version:"%%VERSION_NUM%%" ~doc ~man
+
+let () =
+  match Term.eval default_cmd with
+  | `Ok _ -> exit 0 | _ -> exit 1
