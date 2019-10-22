@@ -255,17 +255,12 @@ let cmd_everything () _target_backend unikernel_file =
         String.sub fn 0 (String.index fn '.')
       in
       output_config filename job_name args functors packages)
-    jobs
-
-  (* output_configs jobs *)
-
+    jobs ;
 (*
-  ;Fmt.pr "%a"
+  Fmt.pr "%a"
       Ocaml_common.Printast.implementation original ;
 *)
-  ; `Ok ()
-
-
+  Ok ()
 
 (* command-line utility *)
 
@@ -354,9 +349,9 @@ let default_cmd =
   TODO our incredibly helpful documentation.
   |}
   ] in
-  Term.(ret (const cmd_everything $ setup_log
-             $ target_backend
-             $ unikernel_file)),
+  Term.(term_result (const cmd_everything $ setup_log
+                     $ target_backend
+                     $ unikernel_file)),
   Term.info "noconfig" ~sdocs:Manpage.s_common_options
     ~version:"%%VERSION_NUM%%" ~doc ~man
 
