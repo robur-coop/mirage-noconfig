@@ -154,43 +154,66 @@ let ext_mirage_depend parsed =
                   (min 7 @@ String.length x) = "Mirage_")
     elems
 
+let device = function
+  | "PCLOCK" -> `Posix_clock
+  | "MCLOCK" -> `Monotonic_clock
+  | "KV_RO" | "Mirage_kv_lwt.RO" -> `Kv_ro
+  | "KV_RW" | "Mirage_kv_lwt.RW" -> `Kv_rw
+  | "HTTP" -> `Http
+  | "NETWORK" -> `Network
+  | "ETHERNET" -> `Ethernet
+  | "ARP" -> `Arp
+  | "IPV4" -> `Ipv4
+  | "TIME" | "Mirage_time_lwt.S" -> `Time
+  | "STACKV4" | "Mirage_stack_lwt.V4" -> `Stackv4
+  | "CONSOLE" -> `Console
+  | "BLOCK" -> `Block
+  | "Resolver_lwt.S" -> `Resolver
+  | "Conduit_mirage.S" -> `Conduit
+  | "IPV6" -> `Ipv6
+  | "RANDOM" -> `Random
+  | x ->
+    Logs.warn (fun m -> m "unknown device %s" x);
+    assert false
+
 let map_foreign = function
-  | "PCLOCK" -> "pclock"
-  | "MCLOCK" -> "mclock"
-  | "KV_RO" | "Mirage_kv_lwt.RO" -> "kv_ro"
-  | "HTTP" -> "http"
-  | "NETWORK" -> "network"
-  | "ETHERNET" -> "ethernet"
-  | "ARP" -> "arpv4"
-  | "IPV4" -> "ipv4"
-  | "TIME" | "Mirage_time_lwt.S" -> "time"
-  | "STACKV4" | "Mirage_stack_lwt.V4" -> "stackv4"
-  | "CONSOLE" -> "console"
-  | "BLOCK" -> "block"
-  | "Resolver_lwt.S" -> "resolver"
-  | "Conduit_mirage.S" -> "conduit"
-  | "IPV6" -> "ipv6"
-  | "RANDOM" -> "random"
-  | _ -> assert false
+  | `Posix_clock -> "pclock"
+  | `Monotonic_clock -> "mclock"
+  | `Kv_ro -> "kv_ro"
+  | `Kv_rw -> "kv_rw"
+  | `Http -> "http"
+  | `Network -> "network"
+  | `Ethernet -> "ethernet"
+  | `Arp -> "arpv4"
+  | `Ipv4 -> "ipv4"
+  | `Time -> "time"
+  | `Stackv4 -> "stackv4"
+  | `Console -> "console"
+  | `Block -> "block"
+  | `Resolver -> "resolver"
+  | `Conduit -> "conduit"
+  | `Ipv6 -> "ipv6"
+  | `Random -> "random"
 
 (* and this is the actual hard part, need to keep some environment to construct proper terms *)
 let map_register = function
-  | _, "PCLOCK" -> "default_posix_clock"
-  | _, "MCLOCK" -> "default_monotonic_clock"
-  | _, "HTTP" -> "cohttp_server (conduit_direct ~tls:true (generic_stackv4 default_network))" (* TODO *)
-  | name, ("KV_RO" | "Mirage_kv_lwt.RO") -> "generic_kv_ro " ^ String.lowercase_ascii name (* TODO *)
-  | _, ("TIME" | "Mirage_time_lwt.S") -> "default_time"
-  | _, ("STACKV4" | "Mirage_stack_lwt.V4") -> "generic_stackv4 default_network" (* TODO *)
-  | _, "CONSOLE" -> "default_console"
-  | _, "BLOCK" -> "block_of_file \"disk.img\"" (* TODO *)
-  | _, "NETWORK" -> "default_network"
-  | _, "ETHERNET" -> "etif default_network" (* TODO depending on (a) number of ethernet (b) whether network was used as well, reuse network binding *)
-  | _, "ARP" -> "arp (etif default_network)" (* TODO see above *)
-  | _, "IPV4" -> "create_ipv4 (etif default_network) (arp (etif default_network))" (* TODO same as above *)
-  | _, "Resolver_lwt.S" -> "resolver_dns (generic_stack default_network)" (* TODO same as above*)
-  | _, "Conduit_mirage.S" -> "conduit_direct (generic_stack default_network)" (* TODO same as above *)
-  | _, "IPV6" -> "create_ipv6 (etif default_network) { addresses = [] ; netmasks = [] ; gateways = [] }" (* TODO ??? *)
-  | _, "RANDOM" -> "default_random"
+  | _, `Posix_clock -> "default_posix_clock"
+  | _, `Monotonic_clock -> "default_monotonic_clock"
+  | _, `Time -> "default_time"
+  | _, `Random -> "default_random"
+  | _, `Console -> "default_console"
+  | _, `Http -> "cohttp_server (conduit_direct ~tls:true (generic_stackv4 default_network))" (* TODO *)
+  | name, `Kv_ro -> "generic_kv_ro " ^ String.lowercase_ascii name (* TODO *)
+  | _, `Kv_rw -> "generic_kv_rw" (* TODO *)
+  | _, `Block -> "block_of_file \"disk.img\"" (* TODO *)
+  | _, `Network -> "default_network"
+  | _, `Ethernet -> "etif default_network" (* TODO depending on (a) number of ethernet (b) whether network was used as well, reuse network binding *)
+  | _, `Arp -> "arp (etif default_network)" (* TODO see above *)
+  | _, `Ipv4 -> "create_ipv4 (etif default_network) (arp (etif default_network))" (* TODO same as above *)
+  | _, `Ipv6 -> "create_ipv6 (etif default_network) { addresses = [] ; netmasks = [] ; gateways = [] }" (* TODO ??? *)
+  | _, `Stackv4 -> "generic_stackv4 default_network" (* TODO *)
+  | _, `Resolver -> "resolver_dns (generic_stack default_network)" (* TODO same as above*)
+  | _, `Conduit -> "conduit_direct (generic_stack default_network)" (* TODO same as above *)
   | _ -> assert false
 
 let pp_package ppf (name, min, max) =
@@ -202,17 +225,19 @@ let pp_package ppf (name, min, max) =
 let output_config fmt filename name _args functors packages =
   (* assert (List.length functors = List.length args);
      -- this is violated by e.g. app_info atm*)
+  let fnames, ftypes = List.split functors in
+  let devices = List.map device ftypes in
   Fmt.pf fmt "open Mirage@.";
   Fmt.pf fmt "let packages = @[[ %a ]@]@.@."
     Fmt.(list ~sep:(unit "; ") pp_package) packages;
   Fmt.pf fmt "let main = foreign ~packages %S @[(%a @-> job)@]@.@."
     (String.capitalize_ascii (filename ^ "." ^ name))
     Fmt.(list ~sep:(unit " @-> ") string)
-    (List.map map_foreign (List.map snd functors));
+    (List.map map_foreign devices);
   Fmt.pf fmt "let () = register %S @[[ main $ %a ]@]@."
     (String.lowercase_ascii name)
     Fmt.(list ~sep:(unit " $ ") string)
-    (List.map map_register functors)
+    (List.map map_register (List.combine fnames devices))
 
 let parse lexbuf =
   let original, parsed =
