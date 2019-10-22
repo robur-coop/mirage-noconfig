@@ -82,18 +82,17 @@ let parse_job =
 
 let collect_attributes things =
   let open Parsetree in
-  List.fold_left (fun (keys, packages) si ->
+  List.fold_left (fun packages si ->
       match si.pstr_desc with
       | Pstr_attribute { attr_name ; attr_payload ; _ } ->
         begin match attr_name.Asttypes.txt with
-          | "package" -> (keys, attr_payload :: packages)
-          | "key" -> (attr_payload :: keys, packages)
+          | "package" -> attr_payload :: packages
           | x ->
             Printf.printf "skipping unknown attribute %s\n" x;
-            (keys, packages)
+            packages
         end
-      | _ -> (keys, packages))
-    ([], []) things
+      | _ -> packages)
+    [] things
 
 let extract_package =
   let open Parsetree in
@@ -198,21 +197,26 @@ let pp_package ppf (name, min, max) =
     Fmt.(option ~none:(unit "") (prefix (unit "~max:") (quote string))) max
     name
 
-let output_config filename name _args functors packages =
-  (* assert (List.length functors = List.length args); *)
-  Fmt.pr "open Mirage\n";
-  Fmt.pr "let packages = [ %a ]\n\n"
+let output_config output filename name _args functors packages =
+  (* assert (List.length functors = List.length args);
+     -- this is violated by e.g. app_info atm*)
+  let fmt = match output with
+    | None -> Fmt.stdout
+    | Some file -> Format.formatter_of_out_channel (Stdlib.open_out file)
+  in
+  Fmt.pf fmt "open Mirage@.";
+  Fmt.pf fmt "let packages = @[[ %a ]@]@.@."
     Fmt.(list ~sep:(unit "; ") pp_package) packages;
-  Fmt.pr "let main = foreign ~packages %S (%a @-> job)\n\n"
+  Fmt.pf fmt "let main = foreign ~packages %S @[(%a @-> job)@]@.@."
     (String.capitalize_ascii (filename ^ "." ^ name))
     Fmt.(list ~sep:(unit " @-> ") string)
     (List.map map_foreign (List.map snd functors));
-  Fmt.pr "let () = register %S [ main $ %a ]\n"
+  Fmt.pf fmt "let () = register %S @[[ main $ %a ]@]@."
     (String.lowercase_ascii name)
     Fmt.(list ~sep:(unit " $ ") string)
     (List.map map_register functors)
 
-let cmd_everything () _target_backend unikernel_file =
+let cmd_everything () _target_backend unikernel_file output_file =
   let original, parsed =
     (* parse using the current compiler tooling,
        then convert to the {!PT} representation that this application
@@ -228,20 +232,15 @@ let cmd_everything () _target_backend unikernel_file =
   topl_functors parsed ;
 (*  Fmt.pr "%a"
       Ocaml_common.Printast.implementation _original ;*)
-
-
   let jobs = List.fold_left (fun acc expr ->
       match parse_job expr with
       | None -> acc
       | Some job -> job::acc
     ) [] parsed in
-
   Fmt.pr "\nExternal modules:\n%a\n----\n"
     Fmt.(list ~sep:(unit"\n")string) @@ ext_mirage_depend original ;
-
-  let _keys, packages = collect_attributes parsed in
+  let packages = collect_attributes parsed in
   let packages = List.flatten @@ List.map extract_package packages in
-
   List.iter (fun (job_name, args, functors) ->
       Fmt.pr "\n-- Job %S in %S:\n" job_name unikernel_file;
       Fmt.pr "args: %a\nfunctors %a\n"
@@ -254,7 +253,7 @@ let cmd_everything () _target_backend unikernel_file =
         let fn = List.hd (List.rev (String.split_on_char '/' unikernel_file)) in
         String.sub fn 0 (String.index fn '.')
       in
-      output_config filename job_name args functors packages)
+      output_config output_file filename job_name args functors packages)
     jobs ;
 (*
   Fmt.pr "%a"
@@ -331,6 +330,10 @@ let unikernel_file =
     ~doc:{|Path to unikernel to analyze. Defaults to current directory.|}
     ~docv:"FILE-OR-FOLDER" ["unikernel"]
 
+let output_file =
+  let doc = "Filename of the generated config.ml (defaults to stdout)" in
+  Arg.(value & opt (some string) None & info [ "output" ] ~doc ~docv:"FILE")
+
 let target_backend =
   let backends = ["spt";"xen";"hvt";"unix";"qubes"] in
   (* TODO there are probably some more;
@@ -349,9 +352,8 @@ let default_cmd =
   TODO our incredibly helpful documentation.
   |}
   ] in
-  Term.(term_result (const cmd_everything $ setup_log
-                     $ target_backend
-                     $ unikernel_file)),
+  Term.(term_result (const cmd_everything $ setup_log $ target_backend $
+                     unikernel_file $ output_file)),
   Term.info "noconfig" ~sdocs:Manpage.s_common_options
     ~version:"%%VERSION_NUM%%" ~doc ~man
 
