@@ -2,7 +2,7 @@
   (name libnoconfig)
   (public_name mirage-noconfig.libnoconfig)
   (modules libnoconfig)
-  (libraries ocaml-compiler-libs.common ocaml-migrate-parsetree logs fmt))
+  (libraries ocaml-compiler-libs.common ocaml-migrate-parsetree logs fmt opam-file-format))
 
 (executable
   (name noconfig)
