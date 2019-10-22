@@ -1,11 +1,12 @@
+(library
+  (name libnoconfig)
+  (public_name mirage-noconfig.libnoconfig)
+  (modules libnoconfig)
+  (libraries ocaml-compiler-libs.common ocaml-migrate-parsetree logs fmt))
+
 (executable
   (name noconfig)
   (modules noconfig)
   (public_name noconfig)
-  (libraries cmdliner
-  fmt.cli fmt.tty
-  logs.cli logs.fmt
-  ocaml-compiler-libs.common
-  ocaml-migrate-parsetree
-  )
-)
+  (libraries mirage-noconfig.libnoconfig cmdliner fmt.cli fmt.tty logs.cli
+             logs.fmt))
