@@ -1,6 +1,6 @@
 open Libnoconfig
 
-let cmd_everything () _target_backend unikernel_file output_file =
+let cmd_everything () _target_backend unikernel_file name output_file =
   let lexbuf = Lexing.from_channel (open_in_bin unikernel_file) in
   let external_modules, jobs, packages = parse lexbuf in
   Fmt.pr "\nExternal modules:\n%a\n----\n"
@@ -17,11 +17,12 @@ let cmd_everything () _target_backend unikernel_file output_file =
         functors;
       Fmt.pr "packages %a\n"
         Fmt.(list ~sep:(unit "@;") pp_package) packages;
-      let filename =
-        let fn = List.hd (List.rev (String.split_on_char '/' unikernel_file)) in
-        String.sub fn 0 (String.index fn '.')
+      let modulename = Filename.(chop_extension @@ basename unikernel_file) in
+      let unikernel = match name with
+        | None -> Filename.(basename @@ dirname unikernel_file)
+        | Some x -> x
       in
-      output_config fmt filename job_name args functors packages)
+      output_config fmt unikernel modulename job_name args functors packages)
     jobs ;
   Ok ()
 
@@ -94,6 +95,10 @@ let unikernel_file =
     ~doc:{|Path to unikernel to analyze. Defaults to current directory.|}
     ~docv:"FILE-OR-FOLDER" ["unikernel"]
 
+let unikernel_name =
+  let doc = "Unikernel name (defaults to dirname)" in
+  Arg.(value & opt (some string) None & info [ "name" ] ~doc)
+
 let output_file =
   let doc = "Filename of the generated config.ml (defaults to stdout)" in
   Arg.(value & opt (some string) None & info [ "output" ] ~doc ~docv:"FILE")
@@ -117,7 +122,7 @@ let default_cmd =
   |}
   ] in
   Term.(term_result (const cmd_everything $ setup_log $ target_backend $
-                     unikernel_file $ output_file)),
+                     unikernel_file $ unikernel_name $ output_file)),
   Term.info "noconfig" ~sdocs:Manpage.s_common_options
     ~version:"%%VERSION_NUM%%" ~doc ~man
 

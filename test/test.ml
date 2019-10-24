@@ -33,6 +33,36 @@ let test_package =
   end in
   (module M : Alcotest.TESTABLE with type t = M.t)
 
+let test_output =
+  let module M = struct
+    type t = (string * (string * Libnoconfig.device) list) list Libnoconfig.DM.t
+    let pp ppf out =
+      let pp_args ppf args =
+        let names, devs = List.split args in
+        Fmt.(list ~sep:(unit " ") string) ppf
+          (List.map2 Libnoconfig.binding_name names devs)
+      in
+      let pp_one key ppf (name, args) =
+        Fmt.pf ppf "%s = ?? %a" (Libnoconfig.binding_name name key) pp_args args
+      in
+      Libnoconfig.DM.iter (fun k v ->
+          Fmt.(list ~sep:(unit "@.") (pp_one k)) ppf v)
+        out
+    let equal a b =
+      Libnoconfig.DM.equal (fun a b ->
+          List.length a = List.length b &&
+          let n, a = List.split a and n', a' = List.split b in
+          List.for_all2 String.equal n n' &&
+          List.for_all2 (fun a a' ->
+              List.length a = List.length a' &&
+              let n, a = List.split a and n', a' = List.split a' in
+              List.for_all2 String.equal n n' &&
+              List.for_all2
+                (fun a b -> Libnoconfig.compare_device a b = 0) a a') a a')
+        a b
+  end in
+  (module M : Alcotest.TESTABLE with type t = M.t)
+
 let base_unikernel = {|
 module Main (T : Mirage_time_lwt.S) = struct
   let start _ = Lwt.return_unit
@@ -100,6 +130,120 @@ let with_many_packages () =
                 "foobar", Some "1.0", Some "3.4"
               ] packages)
 
+let towards_output s =
+  let lexbuf = Lexing.from_string s in
+  let _, jobs, _ = Libnoconfig.parse lexbuf in
+  let _, _, functors = List.hd jobs in
+  let names, types = List.split functors in
+  let types' = List.map Libnoconfig.device types in
+  let names' = List.map Libnoconfig.real_name names in
+  names', types'
+
+let output_basic () =
+  let names, devices = towards_output base_unikernel in
+  Alcotest.(check test_output "basic output test"
+              (Libnoconfig.DM.singleton `Time [ "t", [] ])
+              (Libnoconfig.initialisation_code names devices))
+
+let output_deps () =
+  let unikernel = {|
+module Main (E : Mirage_ethernet.S) = struct
+  let start _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  Alcotest.(check test_output "output test with dependency"
+              (Libnoconfig.DM.add `Network [ "e", [] ]
+                 (Libnoconfig.DM.singleton `Ethernet [ "e", [ "e", `Network ]]))
+              (Libnoconfig.initialisation_code names devices))
+
+let output_deps_rename () =
+  let unikernel = {|
+module Main (E : Mirage_ethernet.S) (N : Mirage_net.S) = struct
+  let start _ _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  Alcotest.(check test_output "output test with dependency, renaming"
+              (Libnoconfig.DM.add `Network [ "n", [] ]
+                 (Libnoconfig.DM.singleton `Ethernet [ "e", [ "n", `Network ]]))
+              (Libnoconfig.initialisation_code names devices))
+
+let output_rec_deps () =
+  let unikernel = {|
+module Main (R : Resolver_lwt.S) = struct
+  let start _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  Alcotest.(check test_output "output test with recursive dependency"
+              (Libnoconfig.DM.add `Network [ "r", [] ]
+                 (Libnoconfig.DM.add `Stackv4 [ "r", [ "r", `Network ] ]
+                    (Libnoconfig.DM.singleton `Resolver [ "r", [ "r", `Stackv4 ]])))
+              (Libnoconfig.initialisation_code names devices))
+
+let output_multi_devices () =
+  let unikernel = {|
+module Main (S : Mirage_net.S) (T : Mirage_net.S) = struct
+  let start _ _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  Alcotest.(check test_output "output test with multiple devices"
+              (Libnoconfig.DM.singleton `Network [ "s", [] ; "t", [] ])
+              (Libnoconfig.initialisation_code names devices))
+
+let output_multi_devices_with_deps () =
+  let unikernel = {|
+module Main (S : Mirage_stack.V4) (T : Mirage_stack.V4) = struct
+  let start _ _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  Alcotest.(check test_output "output test with multiple devices and dependencies"
+              (Libnoconfig.DM.add `Network [ "s", [] ; "t", [] ]
+                 (Libnoconfig.DM.singleton `Stackv4
+                    [ "s", [ "s", `Network ] ; "t", [ "t", `Network ]]))
+              (Libnoconfig.initialisation_code names devices))
+
+let output_ordered () =
+  let unikernel = {|
+module Main (N : NETWORK) (E : ETHERNET) (A : ARP) (I : IPV4) = struct
+  let start _ _ _ _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  let dm =
+    Libnoconfig.DM.add `Network [ "n", [] ]
+      (Libnoconfig.DM.add `Ethernet [ "e", [ "n", `Network ]]
+         (Libnoconfig.DM.add `Arp [ "a", [ "e", `Ethernet ]]
+            (Libnoconfig.DM.singleton `Ipv4
+               [ "i", [ "e", `Ethernet ; "a", `Arp ]])))
+  in
+  Alcotest.(check test_output "output test ordered deps" dm
+              (Libnoconfig.initialisation_code names devices));
+  let unikernel' = {|
+module Main (E : ETHERNET) (A : ARP) (I : IPV4) (N : NETWORK) = struct
+  let start _ _ _ _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel' in
+  Alcotest.(check test_output "output test ordered deps" dm
+              (Libnoconfig.initialisation_code names devices))
+
+let output_multi_names () =
+  let unikernel = {|
+module Main (A_eth : ETHERNET) (B_eth : ETHERNET) (A_arp : ARP) (B_arp : ARP) = struct
+  let start _ _ _ _ = Lwt.return_unit
+end
+|} in
+  let names, devices = towards_output unikernel in
+  Alcotest.(check test_output "output test ordered deps"
+              (Libnoconfig.DM.add `Network [ "a", [] ; "b", [] ]
+                 (Libnoconfig.DM.add `Ethernet [ "a", [ "a", `Network ]; "b", [ "b", `Network ]]
+                    (Libnoconfig.DM.singleton `Arp [ "a", [ "a", `Ethernet ]; "b", [ "b", `Ethernet ]])))
+              (Libnoconfig.initialisation_code names devices))
+
 let tests = [
   "Parser", [
     "basic unikernel", `Quick, basic ;
@@ -109,6 +253,14 @@ let tests = [
     "with a package with an upper bound", `Quick, with_package_upper_bound ;
     "with a package with a bounds", `Quick, with_package_bounds ;
     "with many packages", `Quick, with_many_packages ;
+    "basic output", `Quick, output_basic ;
+    "dependency output", `Quick, output_deps ;
+    "renamed dependency output", `Quick, output_deps_rename ;
+    "recursive dependency output", `Quick, output_rec_deps ;
+    "multiple devices", `Quick, output_multi_devices ;
+    "multiple devices with deps", `Quick, output_multi_devices_with_deps ;
+    "ordered output", `Quick, output_ordered ;
+    "output multiple names", `Quick, output_multi_names ;
   ]
 ]
 
