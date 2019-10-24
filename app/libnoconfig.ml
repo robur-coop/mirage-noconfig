@@ -242,26 +242,6 @@ let dependencies = function
   | `Conduit -> [ `Stackv4 ]
   | `Http -> [ `Conduit ]
 
-(* some environment to match up the (already present/configured) devices *)
-(* what is the access pattern here?
-   - distinguish between "single" device and multiple
-   --> single one is straightforward (register name, use that name)
-   - multiple ones, their use sites:
-   -- lookup (device, name) -> use the result
-
-   - some examples:
-      (n : network) (e : ethernet) (a : arp) (i : ipv4)
-     --> all single
-      (e : ethernet) (a : arp) (i : ipv4) (n : network)
-     --> all single, order is not relevant
-
-      (a : ethernet) (b : ethernet)
-     --> should lead to (netif_a, netif_b), etif netif_a, etif netif_b
-
-      (a_eth : ethernet) (b_eth : ethernet) (a_arp : arp) (b_arp : arp)
-     --> (netif_a, netif_b), etif_a = etif netif_a, etif_b = etif netif_b, arp etif_a, arp etif_b
-*)
-
 (* idempotent *)
 let real_name name =
   (match Astring.String.cut ~sep:"_" name with
