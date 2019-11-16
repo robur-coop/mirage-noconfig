@@ -26,11 +26,13 @@ module OPT = OpamParserTypes
 type device_sig = {
   sig_interface: string ;
   sig_findlib: string list;
+  sig_opam_pkg: string;
   sig_description:string ;
 }
 let empty_sig = {
   sig_interface = "" ;
   sig_findlib = [] ;
+  sig_opam_pkg = "";
   sig_description = "";
 }
 
@@ -39,6 +41,7 @@ type device_impl =
     interface_sig : string ; (* foreign key to device_sig.interface*)
     interface_functor: string ;
     findlib_pkgs : string list ;
+    opam_pkg : string ;
     description: string ;
   }
 let empty_impl = {
@@ -46,6 +49,7 @@ let empty_impl = {
   interface_sig = "" ;
   interface_functor = "";
   findlib_pkgs = [];
+  opam_pkg = "";
   description = "";
 }
 module DevMap = struct
@@ -93,7 +97,7 @@ let map_str_kv (type acc) entry name
     ]) when String.equal k name -> f v acc
   | _ -> Ok acc
 
-let parse_mirage_sig vallist =
+let parse_mirage_sig ~opam_pkg_name vallist =
   match vallist with
   | OPT.List (_loc, sig_list) ->
     (* fold over list of signatures*)
@@ -110,6 +114,9 @@ let parse_mirage_sig vallist =
                 >>= map_str_kv kv "description"
                   (fun sig_description acc ->
                      R.ok {acc with sig_description})
+                >>= map_str_kv kv "opam"
+                  (fun sig_opam_pkg acc ->
+                     R.ok {acc with sig_opam_pkg})
                 >>= fun acc ->
                 match kv with
                 | OPT.List (_, (OPT.String (_, "findlib")::pkgs)) ->
@@ -121,7 +128,10 @@ let parse_mirage_sig vallist =
                       [] pkgs in
                   R.ok {acc with sig_findlib }
                 | _ -> R.ok acc (*R.error_msg "signature entry is not a list"*)
-             ) (R.ok empty_sig) sig_list
+             ) (R.ok
+                  { empty_sig with
+                    sig_opam_pkg = opam_pkg_name
+                  }) sig_list
            >>= fun new_device_sig ->
            R.ok (new_device_sig :: acc)
          | _ -> R.error_msg "signature is not a list"
@@ -129,7 +139,7 @@ let parse_mirage_sig vallist =
       (R.ok []) sig_list
   | _ -> R.error_msg "device signature list is not a list"
 
-let parse_mirage_device _orig_map vallist =
+let parse_mirage_device ~opam_pkg_name _orig_map vallist =
   match vallist with
   | OPT.List (_loc, dev_lst) ->
     (* fold over each device impl description: *)
@@ -140,6 +150,10 @@ let parse_mirage_device _orig_map vallist =
            acc >>= fun acc ->
            let this =
              List.fold_left (fun acc -> function
+                 | OPT.List (_, [
+                     OPT.String (_, "opam") ;
+                     OPT.String (_, opam_pkg)
+                   ] ) -> {acc with opam_pkg }
                  | OPT.List (_, [
                      OPT.String (_, "description") ;
                      OPT.String (_, description)
@@ -163,7 +177,12 @@ let parse_mirage_device _orig_map vallist =
                        | _ -> assert false) values in
                    {acc with findlib_pkgs = values }
                  | _ -> acc
-               ) empty_impl kvs
+               ) {empty_impl with
+                  (* By default the opam_pkg ("opam" key) will be the
+                     package whose contents defined this implementation:
+                  *)
+                  opam_pkg = opam_pkg_name
+                 } kvs
            in
            Ok (this :: acc)
          | _ -> acc
@@ -180,13 +199,14 @@ let pkg_configs () =
           | OPT.Variable (_loc, "x-mirage-device", vallist) ->
             Fmt.epr "%S: x-mirage-device\n%!" fn;
             acc >>= fun acc ->
-            parse_mirage_device acc vallist >>| fun impls ->
+            parse_mirage_device ~opam_pkg_name:pkgname
+              acc vallist >>| fun impls ->
             List.fold_left (fun acc impl ->
                 DevMap.add_implementations acc impl.interface_sig [impl]
               ) acc impls
           | OPT.Variable (_loc, "x-mirage-interface", vallist) ->
             acc >>= fun acc ->
-            parse_mirage_sig vallist >>| fun _impl ->
+            parse_mirage_sig ~opam_pkg_name:pkgname vallist >>| fun _impl ->
             (* TODO currently ignored *)
             acc
           | _ -> acc
