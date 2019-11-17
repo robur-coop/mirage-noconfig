@@ -8,6 +8,67 @@ open Astring
 module PT = Migrate_parsetree.OCaml_409
 module Parsetree = PT.Ast.Parsetree
 
+let parse_bound bound =
+  let open OpamParserTypes in
+  (* >= "1.0" OR < "2.0" OR >= "1.0" & < "2.0" *)
+  match OpamParser.value_from_string bound "" with
+  | Prefix_relop (_pos, `Geq, String (_pos', data)) -> Some data, None
+  | Prefix_relop (_pos, `Lt, String (_pos', data)) -> None, Some data
+  | Logop (_pos, `And,
+           (Prefix_relop (_pos', `Geq, String (_pos'', min))),
+           (Prefix_relop (_pos''', `Lt, String (_pos'''', max)))) ->
+    Some min, Some max
+  | _ -> Logs.warn (fun m -> m "couldn't parse bound %s" bound); None, None
+
+let extract_package payload =
+  (* payload being: "foo" OR "foo" {|bound|}
+     where bound may be any of the three forms:
+     >= "1.0" OR < "2.0" OR >= "1.0" & < "2.0" *)
+  let open Parsetree in
+  match payload with
+  | PStr [ { pstr_desc = Pstr_eval (e, _) ; _ } ] ->
+    (* two kinds of e
+       - Pexp_constant (Pconst_string ("foo", None))
+       - Pexp_apply
+           ({ pexp_desc = Pexp_constant (Pconst_string ("foo", None)); _ },
+           [(_, { pexp_desc = Pexp_constant (Pconst_string ("> \"1.0.0\" ", _)) }) ]
+    *)
+    let name, min, max =
+      match e.pexp_desc with
+      | Pexp_constant (Pconst_string (package_name, _)) ->
+        package_name, None, None
+      | Pexp_apply
+          ({ pexp_desc = Pexp_constant (Pconst_string (package_name, _)) ; _ },
+           [ _, { pexp_desc = Pexp_constant (Pconst_string (bound, _)) ; _ } ]) ->
+        let min, max = parse_bound bound in
+        package_name, min, max
+      | _ -> assert false
+    in
+    (name, min, max)
+  | _ -> assert false (* TODO proper error/warning *)
+
+let is_package attr =
+  String.equal "package" attr.Parsetree.attr_name.Asttypes.txt
+
+let collect_attributes things =
+  let open Parsetree in
+  List.fold_left (fun packages si ->
+      match si.pstr_desc with
+      | Pstr_attribute ({ attr_payload ; _ } as attr) when is_package attr ->
+        extract_package attr_payload :: packages
+      | _ -> packages)
+    [] things |> List.rev
+
+let find_bound attrs =
+  match List.find_opt is_package attrs with
+  | Some { Parsetree.attr_payload = PStr [ struc ] ; _ } ->
+    begin match struc.pstr_desc with
+      | Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (bound, _)) ; _ }, _) ->
+        parse_bound bound
+      | _ -> None, None
+    end
+  | _ -> None, None
+
 let rec long_unwind acc =
   let open PT.Ast.Longident in
   function
@@ -18,21 +79,49 @@ let rec long_unwind acc =
 let modtyp =
   let open PT.Ast.Parsetree in
   function
-  | None -> "NONETODO"
+  | None -> assert false
   | Some x ->
-    match x.pmty_desc with
-    | Pmty_ident {txt ; _ } -> (* long_unwind [] txt *)
-      begin match txt with
-        | Lident plain -> plain
-        | Ldot (a, b) ->
-          begin match a with
-            | Lident "Mirage_types" | Lident "Mirage_types_lwt" -> ""
-            | Lident sth -> sth ^ "."
-            | _ -> assert false
-          end ^ b
-        | Lapply _ -> assert false
-      end
-    | _ -> "TODO too complicated"
+    let typ = match x.pmty_desc with
+      | Pmty_ident {txt ; _ } -> (* long_unwind [] txt *)
+        begin match txt with
+          | Lident plain -> plain
+          | Ldot (a, b) ->
+            begin match a with
+              | Lident "Mirage_types" | Lident "Mirage_types_lwt" -> ""
+              | Lident sth -> sth ^ "."
+              | _ -> assert false
+            end ^ b
+          | Lapply _ -> assert false
+        end
+      | _ -> assert false
+    and lower_b, upper_b = find_bound x.pmty_attributes
+    in
+    typ, lower_b, upper_b
+
+type funktor = {
+  name : string ;
+  typ : string ;
+  lower_bound : string option ;
+  upper_bound : string option ;
+}
+
+let pp_funktor ppf f =
+  Fmt.pf ppf "name %s typ %s (>= %a & < %a)"
+    f.name f.typ
+    Fmt.(option ~none:(unit "no") string) f.lower_bound
+    Fmt.(option ~none:(unit "no") string) f.upper_bound
+
+let eq_funktor a b =
+  String.equal a.name b.name &&
+  String.equal a.typ b.typ &&
+  (match a.lower_bound, b.lower_bound with
+   | None, None -> true
+   | Some a, Some b -> String.equal a b
+   | _ -> false) &&
+  (match a.upper_bound, b.upper_bound with
+   | None, None -> true
+   | Some a, Some b -> String.equal a b
+   | _ -> false)
 
 let parse_job =
   let open Parsetree in
@@ -47,7 +136,9 @@ let parse_job =
   let rec fold_functor functors = function
     | Pmod_functor (name, typ , next) ->
       (*fold_functor ((name, typ) :: acc) next.pmod_desc*)
-      fold_functor ((name.txt, modtyp typ) :: functors) next.pmod_desc
+      let typ, lower_bound, upper_bound = modtyp typ in
+      let f = { name = name.txt ; typ ; lower_bound ; upper_bound } in
+      fold_functor (f :: functors) next.pmod_desc
     | Pmod_structure lst ->
       let start_args =
         List.fold_left (fun acc si ->
@@ -81,58 +172,6 @@ let parse_job =
       | _ -> None
     end
   | _ -> None
-
-let parse_bound bound =
-  let open OpamParserTypes in
-  (* >= "1.0" OR < "2.0" OR >= "1.0" & < "2.0" *)
-  match OpamParser.value_from_string bound "" with
-  | Prefix_relop (_pos, `Geq, String (_pos', data)) -> Some data, None
-  | Prefix_relop (_pos, `Lt, String (_pos', data)) -> None, Some data
-  | Logop (_pos, `And,
-           (Prefix_relop (_pos', `Geq, String (_pos'', min))),
-           (Prefix_relop (_pos''', `Lt, String (_pos'''', max)))) ->
-    Some min, Some max
-  | _ -> Logs.warn (fun m -> m "couldn't parse bound %s" bound); None, None
-
-let extract_package payload =
-  (* payload being: "foo" OR "foo" {|bound|}
-     where bound may be any of the three forms:
-     >= "1.0" OR < "2.0" OR >= "1.0" & < "2.0" *)
-  let open Parsetree in
-  match payload with
-  | PStr [ { pstr_desc = Pstr_eval (e, _) ; _ } ] ->
-    (* two kinds of e
-       - Pexp_constant (Pconst_string ("foo", None))
-       - Pexp_apply
-           ({ pexp_desc = Pexp_constant (Pconst_string ("foo", None)); _ },
-           [(_, { pexp_desc = Pexp_constant (Pconst_string ("> \"1.0.0\" ", _)) }) ]
-    *)
-    let name, min, max =
-      match e.pexp_desc with
-      | Pexp_constant (Pconst_string (package_name, _)) -> package_name, None, None
-      | Pexp_apply
-          ({ pexp_desc = Pexp_constant (Pconst_string (package_name, _)) ; _ },
-           [ _, { pexp_desc = Pexp_constant (Pconst_string (bound, _)) ; _ } ]) ->
-        let min, max = parse_bound bound in
-        package_name, min, max
-      | _ -> assert false
-    in
-    (name, min, max)
-  | _ -> assert false (* TODO proper error/warning *)
-
-let collect_attributes things =
-  let open Parsetree in
-  List.fold_left (fun packages si ->
-      match si.pstr_desc with
-      | Pstr_attribute { attr_name ; attr_payload ; _ } ->
-        begin match attr_name.Asttypes.txt with
-          | "package" -> extract_package attr_payload :: packages
-          | x ->
-            Logs.warn (fun m -> m "skipping unknown attribute %s" x);
-            packages
-        end
-      | _ -> packages)
-    [] things |> List.rev
 
 let topl_functors lst =
   List.iter (
@@ -374,7 +413,7 @@ let pp_package ppf (name, min, max) =
 let output_config fmt unikernel filename modname _args functors packages =
   (* assert (List.length functors = List.length args);
      -- this is violated by e.g. app_info atm*)
-  let fnames, ftypes = List.split functors in
+  let fnames, ftypes = List.split (List.map (fun f -> f.name, f.typ) functors) in
   let devices = List.map device ftypes in
   Fmt.pf fmt "open Mirage@.";
   Fmt.pf fmt "let packages = @[[ %a ]@]@.@."

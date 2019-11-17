@@ -11,10 +11,11 @@ let cmd_everything () _target_backend unikernel_file name output_file =
   in
   List.iter (fun (job_name, args, functors) ->
       Fmt.pr "\n-- Job %S in %S:\n" job_name unikernel_file;
+      let fs = List.map (fun f -> f.name, f.typ) functors in
       Fmt.pr "args: %a\nfunctors %a\n"
         Fmt.(list ~sep:(unit " ") string) args
         Fmt.(list ~sep:(unit " -> ") (pair ~sep:(unit " : ") string string))
-        functors;
+        fs;
       Fmt.pr "packages %a\n"
         Fmt.(list ~sep:(unit "@;") pp_package) packages;
       let modulename = Filename.(chop_extension @@ basename unikernel_file) in
