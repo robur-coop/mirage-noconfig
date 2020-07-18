@@ -148,7 +148,8 @@ let parse_job =
                   (* a value binding list *)
                   begin match vb.pvb_pat.ppat_desc with
                     | Ppat_var {txt; _} ->
-                      if txt <> "start" then acc else fold_function [] vb.pvb_expr
+                      if txt <> "start" then acc
+                      else fold_function [] vb.pvb_expr
                     | _ -> acc
                   end) acc vbs
             | _ -> acc) [] lst
@@ -191,7 +192,15 @@ let ext_mirage_depend parsed =
       type t = string let compare = compare
     end) in
   let elems = SS.elements (Obj.magic their_stringset) in
-  List.filter (String.is_prefix ~affix:"Mirage_") elems
+  (* List.filter (String.is_prefix ~affix:"Mirage_") elems
+  *)
+  List.fold_left (fun acc modname ->
+      match Findlib_scrape.lookup modname with
+      | None ->
+        Logs.warn (fun m -> m "unable to identify findlib pkg for %S; is the correct package installed?" modname) ;
+        acc
+      | Some found -> found::acc
+    ) [] elems
 
 type device =
   [ `Posix_clock | `Monotonic_clock | `Random | `Time
@@ -226,7 +235,7 @@ let compare_device a b =
 let device = function
   | "PCLOCK" -> `Posix_clock
   | "MCLOCK" | "Mirage_clock.MCLOCK" -> `Monotonic_clock
-  | "RANDOM" | "Mirage_random.C" -> `Random
+  | "RANDOM" | "Mirage_random.C" | "Mirage_random.S" -> `Random
   | "TIME" | "Mirage_time_lwt.S" -> `Time
   | "CONSOLE" -> `Console
   | "BLOCK" -> `Block
@@ -422,11 +431,14 @@ let output_config fmt unikernel filename modname _args functors packages =
     (String.Ascii.capitalize (filename ^ "." ^ modname))
     Fmt.(list ~sep:(unit " @-> ") string)
     (List.map map_foreign devices);
+  assert (unikernel <> ".") ;
   let init = initialisation_code (List.map real_name fnames) devices in
   Fmt.pf fmt "let () =@.@[%a@] in@.register %S @[[ main $ %a ]@]@."
-    Fmt.(list ~sep:(unit " in@.") (prefix (unit "let ") (pair ~sep:(unit " = ") string string)))
+    Fmt.(list ~sep:(unit " in@.")
+           (prefix (unit "let ") (pair ~sep:(unit " = ") string string)))
     (output_initialisation init)
-    unikernel Fmt.(list ~sep:(unit " $ ") string)
+    unikernel (* <- the registered name *)
+    Fmt.(list ~sep:(unit " $ ") string)
     (List.map2 binding_name fnames devices)
 
 let parse lexbuf =

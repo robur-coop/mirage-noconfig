@@ -3,23 +3,33 @@ open Libnoconfig
 let cmd_everything () _target_backend unikernel_file name output_file =
   let lexbuf = Lexing.from_channel (open_in_bin unikernel_file) in
   let external_modules, jobs, packages = parse lexbuf in
-  Fmt.pr "\nExternal modules:\n%a\n----\n"
-    Fmt.(list ~sep:(unit"\n")string) external_modules ;
+  Logs.debug (fun m -> m "\npackages from attributes: %a\n"
+                 Fmt.(list ~sep:(unit" ; ") @@ fun ppf (n,c1,c2) ->
+                      Fmt.pf ppf "%s %a %a" n
+                        (option string) c1 (option string)c2) packages) ;
+  Logs.debug (fun m -> m "\nExternal modules:\n%a\n----\n"
+                 Fmt.(list ~sep:(unit"\n")string) external_modules) ;
+  let packages =
+    (* TODO external_modules should be a last resort,
+       the package annotation should override it *)
+    packages
+    @ (List.map (fun p -> p, None, None) external_modules) in
   let fmt = match output_file with
     | None -> Fmt.stdout
     | Some file -> Format.formatter_of_out_channel (Stdlib.open_out file)
   in
   List.iter (fun (job_name, args, functors) ->
-      Fmt.pr "\n-- Job %S in %S:\n" job_name unikernel_file;
+      Logs.debug (fun m -> m "\n-- Job %S in %S:\n" job_name unikernel_file);
       let fs = List.map (fun f -> f.name, f.typ) functors in
-      Fmt.pr "args: %a\nfunctors %a\n"
+      Logs.debug (fun m -> m "args: %a\nfunctors %a\n"
         Fmt.(list ~sep:(unit " ") string) args
         Fmt.(list ~sep:(unit " -> ") (pair ~sep:(unit " : ") string string))
-        fs;
-      Fmt.pr "packages %a\n"
-        Fmt.(list ~sep:(unit "@;") pp_package) packages;
+        fs) ;
+      Logs.debug (fun m -> m "packages %a\n"
+        Fmt.(list ~sep:(unit "@;") pp_package) packages) ;
       let modulename = Filename.(chop_extension @@ basename unikernel_file) in
       let unikernel = match name with
+        | Some "."
         | None -> Filename.(basename @@ dirname unikernel_file)
         | Some x -> x
       in
@@ -58,15 +68,13 @@ let file_or_path_conv : string Cmdliner.Arg.conv =
     let path = if path = "" then "." else path in
     let path =
       if Sys.file_exists path && Sys.is_directory path
-      then path ^ "/unikernel.ml" else path in
+      then (if path = "." then Sys.getcwd () else path)
+           ^ "/unikernel.ml" else path in
     let path = normalize_path path in
     (* file_exists returns true for directories as well: *)
     if Sys.file_exists path && not (Sys.is_directory path)
-    then begin Logs.app (fun m -> m "file %S" path); Ok path
+    then begin Logs.debug (fun m -> m "file %S" path); Ok path
     end else begin
-      let path =
-        if '.' = path.[0]
-        then Sys.getcwd () ^ "/" ^ path else path in
       Error (`Msg (Format.sprintf
                      "Is this a unikernel? Unable to find %S" (normalize_path path)))
     end
@@ -93,7 +101,8 @@ let unikernel_file =
   (* here we use {!opt_converted} to make sure we have a valid path*)
   opt_converted "." file_or_path_conv
   @@ Arg.info
-    ~doc:{|Path to unikernel to analyze. Defaults to current directory.|}
+    ~doc:{|Path to unikernel to analyze.
+Defaults to 'unikernel.ml' in the current directory.|}
     ~docv:"FILE-OR-FOLDER" ["unikernel"]
 
 let unikernel_name =

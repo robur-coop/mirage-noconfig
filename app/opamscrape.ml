@@ -78,6 +78,7 @@ let parse_file fn =
   | f -> Ok f.file_contents
 
 let pkg_names () =
+  (* installed packages? *)
   parse_file ".opam-switch/switch-state" >>|
   List.fold_left (fun acc -> function
       | OPT.Variable (_loc1, "roots", OPT.List (_loc2, vals)) ->
@@ -189,28 +190,34 @@ let parse_mirage_device ~opam_pkg_name _orig_map vallist =
       ) (Ok []) dev_lst
   | _ -> R.error_msgf "x-mirage-device is not a list"
 
+
 let pkg_configs () =
   pkg_names () >>=
   List.fold_left (fun m pkgname ->
       m >>= fun m ->
       let fn = ".opam-switch/packages/" ^ pkgname ^ "/opam" in
-      parse_file fn >>= fun conf ->
-      let relevant = List.fold_left (fun acc -> function
-          | OPT.Variable (_loc, "x-mirage-device", vallist) ->
-            Fmt.epr "%S: x-mirage-device\n%!" fn;
-            acc >>= fun acc ->
-            parse_mirage_device ~opam_pkg_name:pkgname
-              acc vallist >>| fun impls ->
-            List.fold_left (fun acc impl ->
-                DevMap.add_implementations acc impl.interface_sig [impl]
-              ) acc impls
-          | OPT.Variable (_loc, "x-mirage-interface", vallist) ->
-            acc >>= fun acc ->
-            parse_mirage_sig ~opam_pkg_name:pkgname vallist >>| fun _impl ->
-            (* TODO currently ignored *)
-            acc
-          | _ -> acc
-        ) (Ok m) conf in
-      relevant
+      begin match parse_file fn with
+        | Error `Msg parsefailed ->
+          Fmt.epr "%s: skipping: %s\n%!" pkgname parsefailed ;
+          Ok m
+        | Ok conf ->
+          let relevant = List.fold_left (fun acc -> function
+              | OPT.Variable (_loc, "x-mirage-device", vallist) ->
+                Fmt.epr "%S: x-mirage-device\n%!" fn;
+                acc >>= fun acc ->
+                parse_mirage_device ~opam_pkg_name:pkgname
+                  acc vallist >>| fun impls ->
+                List.fold_left (fun acc impl ->
+                    DevMap.add_implementations acc impl.interface_sig [impl]
+                  ) acc impls
+              | OPT.Variable (_loc, "x-mirage-interface", vallist) ->
+                acc >>= fun acc ->
+                parse_mirage_sig ~opam_pkg_name:pkgname vallist >>| fun _impl ->
+                (* TODO currently ignored *)
+                acc
+              | _ -> acc
+            ) (Ok m) conf in
+          relevant
+      end
     )
     (Ok DevMap.empty)

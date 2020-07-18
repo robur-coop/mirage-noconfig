@@ -1,10 +1,10 @@
 (library
   (name libnoconfig)
   (public_name mirage-noconfig.libnoconfig)
-  (modules libnoconfig opamscrape)
+  (modules libnoconfig opamscrape findlib_scrape)
   (wrapped false)
   (libraries ocaml-compiler-libs.common ocaml-migrate-parsetree logs
-             fmt opam-file-format astring rresult))
+             fmt opam-file-format astring rresult findlib))
 
 (executable
   (name noconfig)
