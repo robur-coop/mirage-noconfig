@@ -29,6 +29,5 @@ depends: [
   "ocaml-migrate-parsetree"
   "logs"
   "rresult"
-  "findlib"
   "alcotest" { with-test }
 ]

@@ -9,11 +9,21 @@ let cmd_everything () _target_backend unikernel_file name output_file =
                         (option string) c1 (option string)c2) packages) ;
   Logs.debug (fun m -> m "\nExternal modules:\n%a\n----\n"
                  Fmt.(list ~sep:(unit"\n")string) external_modules) ;
-  let packages =
-    (* TODO external_modules should be a last resort,
-       the package annotation should override it *)
-    packages
-    @ (List.map (fun p -> p, None, None) external_modules) in
+  let () =
+    let suggestions, missing = Findlib_scrape.find_undeclared_packages
+        ~declared:packages ~external_modules in
+    List.iter (fun modname -> Logs.warn (fun m ->
+        m "Module %S is referenced, but cannot determine findlib package."
+          modname)) missing ;
+    (* TODO we should filter out the ones that Mirage
+       automagically knows about, like mirage-clock? *)
+    List.iter (fun (modname,findlibpkg) -> Logs.warn (fun m ->
+        m "Module %S is referenced, unikernel file may need a %a declaration?"
+          modname
+          Fmt.(styled (`Fg (`Hi `Blue)) @@ (* double @@ escapes single @ below: *)
+               Fmt.fmt "[@@@@@@package %S]") findlibpkg
+      )) suggestions
+  in
   let fmt = match output_file with
     | None -> Fmt.stdout
     | Some file -> Format.formatter_of_out_channel (Stdlib.open_out file)

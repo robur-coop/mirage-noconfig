@@ -192,15 +192,8 @@ let ext_mirage_depend parsed =
       type t = string let compare = compare
     end) in
   let elems = SS.elements (Obj.magic their_stringset) in
-  (* List.filter (String.is_prefix ~affix:"Mirage_") elems
-  *)
-  List.fold_left (fun acc modname ->
-      match Findlib_scrape.lookup modname with
-      | None ->
-        Logs.warn (fun m -> m "unable to identify findlib pkg for %S; is the correct package installed?" modname) ;
-        acc
-      | Some found -> found::acc
-    ) [] elems
+  (* List.filter (String.is_prefix ~affix:"Mirage_") elems *)
+  elems
 
 type device =
   [ `Posix_clock | `Monotonic_clock | `Random | `Time

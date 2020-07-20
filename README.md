@@ -17,8 +17,26 @@ my-project $ ./main.native
 
 ```
 
-# TODO
-- the intention was to let people manually annotate required external modules with `[@package]` annotations to ensure they get put in the `packages` binding in `config.ml`. I cannot get this to work, so for now we try to infer it from the set of installed packages using findlib, which I found works relatively well.
+# Registering external dependencies
+
+Usually the external packages/libraries required are signalled to the `mirage configure` tool with the `foreign ~packages` argument.
+
+Since `noconfig` generates a new `config.ml`, a different mechanism is required.
+
+`noconfig` will look for `package` annotations in the top level in your unikernel file, like this:
+
+```ocaml
+[@@@package "ipaddr"]
+[@@@package "tcpip" {| >= "0.2" |}  ]
+[@@@package "foo"   {| >= "1.0" & < "2.0" |}]
+
+module Main = struct
+  (* No-op unikernel *)
+  let start () = Lwt.return ()
+end
+```
+
+This will result in packages `ipaddr`, `tcpip`, and `foo` being registered, and the bounds provided as the optional second parameter are passed on to `opam`.
 
 # TODO / pain points
 - mirage configure doesn't work when run in a local git repo without a 'origin' remote
